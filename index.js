@@ -4,7 +4,13 @@ const app = express()
 const cors = require('cors');
 const morgan = require('morgan')
 const port = process.env.PORT || 4000;
+const admin = require("firebase-admin");
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8')
+const serviceAccount = JSON.parse(decoded);
 
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+});
 app.use(morgan('dev'))
 app.use(express.json())
 app.use(cors())
@@ -12,6 +18,7 @@ app.use(cors())
 // user verify token in firebase
 const verifyFBToken = async (req, res, next) => {
     const authorization = req.headers.authorization;
+    console.log(authorization)
     if (!authorization) {
         return res.status(401).send({ message: "Unauthorized access" });
     }
@@ -46,10 +53,10 @@ const client = new MongoClient(uri, {
 async function run() {
     const myDB = client.db('garmentFlowDb')
     const usersCollection = myDB.collection('users');
+    const productCollection = myDB.collection('allProduct')
     try {
         // Connect the client to the server	(optional starting in v4.7)
         await client.connect();
-
         // admin verify 
         const adminVerify = async (req, res, next) => {
             const email = req.decoded_email
@@ -81,7 +88,11 @@ async function run() {
             const user = await usersCollection.findOne(query);
             res.send({ role: user?.role || 'buyer' })
         })
-
+        // add products
+        app.post('/add-product', verifyFBToken, managerVerify, async (req, res) => {
+            const product = req.body;
+            console.log(product)
+        })
         // create user api
         app.post('/user', async (req, res) => {
             const user = req.body;
@@ -107,7 +118,7 @@ async function run() {
         });
 
         // get users api
-        app.get('/users', async (req, res) => {
+        app.get('/users', verifyFBToken, adminVerify, async (req, res) => {
             const resutl = await usersCollection.find().toArray();
             res.send(resutl)
         })
