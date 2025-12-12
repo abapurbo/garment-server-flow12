@@ -74,18 +74,38 @@ async function run() {
 
             next();
         }
+        // get a user role 
+        app.get('/users/:email/role', async (req, res) => {
+            const email = req.params.email;
+            const query = { email }
+            const user = await usersCollection.findOne(query);
+            res.send({ role: user?.role || 'buyer' })
+        })
 
         // create user api
         app.post('/user', async (req, res) => {
-
             const user = req.body;
-            const updateUser = {
-                ...user,
-                createdAt: new Date()
+            // Default Role
+            const role = user.role || 'buyer';
+            const email = user.email;
+            // Check if already exists
+            const existingUser = await usersCollection.findOne({ email });
+
+            if (existingUser) {
+                return res.send({ message: 'user already exists' });
             }
-            const result = await usersCollection.insertOne(updateUser)
-            res.send(result)
-        })
+
+            // Prepare new user
+            const newUser = {
+                ...user,
+                role,
+                createdAt: new Date()
+            };
+
+            const result = await usersCollection.insertOne(newUser);
+            res.send(result);
+        });
+
         // get users api
         app.get('/users', async (req, res) => {
             const resutl = await usersCollection.find().toArray();
