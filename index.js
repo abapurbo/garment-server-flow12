@@ -4,10 +4,10 @@ const app = express()
 const cors = require('cors');
 const morgan = require('morgan')
 const port = process.env.PORT || 4000;
+
 const admin = require("firebase-admin");
 const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8')
 const serviceAccount = JSON.parse(decoded);
-
 admin.initializeApp({
     credential: admin.credential.cert(serviceAccount)
 });
@@ -18,7 +18,6 @@ app.use(cors())
 // user verify token in firebase
 const verifyFBToken = async (req, res, next) => {
     const authorization = req.headers.authorization;
-    console.log(authorization)
     if (!authorization) {
         return res.status(401).send({ message: "Unauthorized access" });
     }
@@ -82,16 +81,47 @@ async function run() {
             next();
         }
         // get a user role 
-        app.get('/users/:email/role', async (req, res) => {
+        app.get('/users/:email/role', verifyFBToken, async (req, res) => {
             const email = req.params.email;
             const query = { email }
             const user = await usersCollection.findOne(query);
             res.send({ role: user?.role || 'buyer' })
         })
+        // user get products
+        app.get('/all-product', verifyFBToken, async (req, res) => {
+            const result = await productCollection.find().toArray();
+            res.send(result);
+        })
+        // manager all products
+        app.get('/manage-products',verifyFBToken,managerVerify,async (req,res) => {
+            const email = req.query.email;
+            if(req.decoded_email !== email){
+                return res.status(403).send({message:'Forbidden access'})
+            }
+            const result = await productCollection.find({providerEmail:email }).toArray()
+            res.send(result)
+        })
         // add products
         app.post('/add-product', verifyFBToken, managerVerify, async (req, res) => {
             const product = req.body;
-            console.log(product)
+            const price = Number(product.price);
+            const minOrderQty = Number(product.minOrderQty)
+            const availableQty = Number(product.availableQty)
+            const { displayName, ...rest } = product
+            const providerEmail = req.decoded_email
+            const providerName=displayName;
+            const newProduct = {
+                price,
+                minOrderQty,
+                availableQty,
+                providerEmail,
+                providerName,
+                ...rest,
+                createdAt: new Date()
+            }
+            console.log(newProduct)
+            const result = await productCollection.insertOne(newProduct)
+            res.send(result)
         })
         // create user api
         app.post('/user', async (req, res) => {
