@@ -37,7 +37,7 @@ const verifyFBToken = async (req, res, next) => {
 
 
 }
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.p9igsxk.mongodb.net/?appName=Cluster0`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -88,18 +88,61 @@ async function run() {
             res.send({ role: user?.role || 'buyer' })
         })
         // user get products
-        app.get('/all-product', verifyFBToken, async (req, res) => {
-            const result = await productCollection.find().toArray();
-            res.send(result);
+        app.get('/all-product', async (req, res) => {
+
+            // client থেকে order='asc' বা 'desc' এবং sortField='price' পাঠান
+            const { limit = 0, skip = 0, sortField = 'price', order = 'desc', search = '' } = req.query;
+
+            const filter = {};
+            if (search) {
+                filter.name = { $regex: search, $options: 'i' };
+            }
+
+            const sortOption = {};
+            sortOption[sortField] = order === 'asc' ? 1 : -1;
+
+            const products = await productCollection
+                .find(filter)
+                .sort(sortOption)
+                .limit(Number(limit))
+                .skip(Number(skip))
+                .toArray();
+
+            const total = await productCollection.countDocuments(filter);
+
+            res.send({ products, total });
+
+
+        });
+        app.get('/home-products', async (req, res) => {
+            const showOnHome = req.query.showOnHome == true
+
+            const result = await productCollection
+                .find({ showOnHome: showOnHome })
+                .limit(6)
+                .toArray();
+
+            return res.send(result);
+
         })
         // manager all products
-        app.get('/manage-products',verifyFBToken,managerVerify,async (req,res) => {
+        app.get('/manage-products', verifyFBToken, managerVerify, async (req, res) => {
             const email = req.query.email;
-            if(req.decoded_email !== email){
-                return res.status(403).send({message:'Forbidden access'})
+            if (req.decoded_email !== email) {
+                return res.status(403).send({ message: 'Forbidden access' })
             }
-            const result = await productCollection.find({providerEmail:email }).toArray()
+            const result = await productCollection.find({ providerEmail: email }).toArray()
             res.send(result)
+        })
+        // search products
+        app.get('/search-products', verifyFBToken, async (req, res) => {
+            const searchText = req.query.searchText || "";
+            const query = {
+                name: { $regex: searchText, $options: 'i' }
+            }
+            const result = await productCollection.find(query).toArray();
+            res.send(result)
+
         })
         // add products
         app.post('/add-product', verifyFBToken, managerVerify, async (req, res) => {
@@ -109,7 +152,7 @@ async function run() {
             const availableQty = Number(product.availableQty)
             const { displayName, ...rest } = product
             const providerEmail = req.decoded_email
-            const providerName=displayName;
+            const providerName = displayName;
             const newProduct = {
                 price,
                 minOrderQty,
@@ -123,6 +166,7 @@ async function run() {
             const result = await productCollection.insertOne(newProduct)
             res.send(result)
         })
+
         // create user api
         app.post('/user', async (req, res) => {
             const user = req.body;
@@ -146,7 +190,42 @@ async function run() {
             const result = await usersCollection.insertOne(newUser);
             res.send(result);
         });
+        // update products
+        app.patch('/update-product/:id', verifyFBToken, managerVerify, async (req, res) => {
+            const email = req.query.email;
+            const id = req.params.id
+            const updateData = req.body;
+            const query = { _id: new ObjectId(id) }
+            if (req.decoded_email !== email) {
+                return res.status(403).send({ message: 'Forbidden access' })
+            }
+            const newUpdateData = {
+                $set: {
+                    name: updateData.name,
+                    category: updateData.category,
+                    description: updateData.description,
+                    price: updateData.price,
+                    minOrderQty: updateData.minOrderQty,
+                    availableQty: updateData.availableQty,
+                    showOnHome: updateData.showOnHome,
+                    image: updateData.image,
+                    providerEmail: req.decoded_email,
+                    paymentOption: updateData.paymentOption,
+                    demoLink: updateData.demoLink,
+                }
+            }
 
+            const result = await productCollection.updateOne(query, newUpdateData);
+            res.send(result)
+
+        })
+        // delete products
+        app.delete('/delete-product/:id', verifyFBToken, managerVerify, async (req, res) => {
+            const id = req.params.id;
+            const query = { _id: new ObjectId(id) };
+            const result = await productCollection.deleteOne(query);
+            res.send(result);
+        })
         // get users api
         app.get('/users', verifyFBToken, adminVerify, async (req, res) => {
             const resutl = await usersCollection.find().toArray();
