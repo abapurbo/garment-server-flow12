@@ -4,13 +4,34 @@ const app = express()
 const cors = require('cors');
 const morgan = require('morgan')
 const port = process.env.PORT || 4000;
-
+const stripe = require('stripe')(process.env.Secret_key);
 const admin = require("firebase-admin");
+const crypto = require('crypto')
+
+
 const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8')
 const serviceAccount = JSON.parse(decoded);
 admin.initializeApp({
     credential: admin.credential.cert(serviceAccount)
 });
+
+
+// order id genarete 
+function generateOrderId() {
+    const prefix = "ORD"; // Order prefix
+    const date = new Date()
+        .toISOString()
+        .slice(0, 10)
+        .replace(/-/g, ""); // YYYYMMDD
+
+    const random = crypto
+        .randomBytes(3)
+        .toString("hex")
+        .toUpperCase(); // 6-char random
+
+    return `${prefix}-${date}-${random}`;
+}
+
 app.use(morgan('dev'))
 app.use(express.json())
 app.use(cors())
@@ -53,6 +74,23 @@ async function run() {
     const myDB = client.db('garmentFlowDb')
     const usersCollection = myDB.collection('users');
     const productCollection = myDB.collection('allProduct')
+    const orderCollection = myDB.collection('buyerOrder')
+    // order payment method validation
+    const validateOrder = (product, paymentMethod, orderQty) => {
+        if (!product) {
+            throw new Error("Product not found");
+        }
+
+        if (!product.paymentOptions.includes(paymentMethod)) {
+            throw new Error("This payment method is not allowed for this product");
+        }
+
+        if (product.availableQty < orderQty) {
+            throw new Error("Insufficient stock");
+        }
+    };
+
+
     try {
         // Connect the client to the server	(optional starting in v4.7)
         await client.connect();
@@ -87,6 +125,211 @@ async function run() {
             const user = await usersCollection.findOne(query);
             res.send({ role: user?.role || 'buyer' })
         })
+
+        //payment stripe order
+        app.post("/payment-checkout-session", verifyFBToken, async (req, res) => {
+            try {
+                const { productId, quantity } = req.body;
+                const qty = Number(quantity);
+
+                // Product fetch from DB
+                const product = await productCollection.findOne({
+                    _id: new ObjectId(productId),
+                });
+
+                if (!product) {
+                    return res.status(404).send({ message: "Product not found" });
+                }
+
+                //  Payment method validation
+                if (!product.paymentOption?.includes("Stripe")) {
+                    return res
+                        .status(400)
+                        .send({ message: "Stripe payment not allowed for this product" });
+                }
+
+                //  Stock validation
+                if (qty > product.availableQty) {
+                    return res.status(400).send({ message: "Insufficient stock" });
+                }
+
+                //  Amount from DB (NOT client)
+                const amount = product.price * qty * 100;
+
+                const session = await stripe.checkout.sessions.create({
+                    line_items: [
+                        {
+                            price_data: {
+                                currency: "usd",
+                                unit_amount: amount,
+                                product_data: {
+                                    name: product.name,
+                                },
+                            },
+                            quantity: qty,
+                        },
+                    ],
+                    mode: "payment",
+                    metadata: {
+                        productId: product._id.toString(),
+                    },
+                    customer_email: req.decoded_email,
+                    success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+                    cancel_url: `${process.env.SITE_DOMAIN}/orderForm/${productId}`,
+                });
+
+                res.send({ url: session.url });
+            } catch (err) {
+                console.error(err);
+                res.status(500).send({ message: "Stripe session error" });
+            }
+        }
+        );
+
+
+
+        // payment success
+        app.patch('/payment-success', async (req, res) => {
+            const sessionId = req.query.session_id;
+            const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+            // console.log('session retrieve', session)
+            const transactionId = session.payment_intent;
+            const query = { transactionId: transactionId }
+
+            // checking already payment in database
+            // const paymentExist = await paymentCollection.findOne(query);
+            // // console.log(paymentExist);
+            // if (paymentExist) {
+            //     return res.send({
+            //         message: 'already exists',
+            //         transactionId,
+            //         trackingId: paymentExist.trackingId
+            //     })
+            // }
+
+            // use the previous tracking id created during the parcel create which was set to the session metadata during session creation
+            const orderId = session.metadata.orderId;
+
+            if (session.payment_status === 'paid') {
+                const id = session.metadata.productId;
+                const query = { _id: new ObjectId(id) }
+                const update = {
+                    $set: {
+                        paymentStatus: 'paid',
+                    }
+                }
+
+                const result = await Collection.updateOne(query, update);
+
+                const payment = {
+                    amount: session.amount_total / 100,
+                    currency: session.currency,
+                    byerEmail: session.customer_email,
+                    orderId: session.metadata.productId,
+                    productName: session.metadata.productName,
+                    transactionId: session.payment_intent,
+                    paymentStatus: session.payment_status,
+                    paidAt: new Date(),
+                    orderId: orderId
+                }
+
+
+                const resultPayment = await orderCollection.insertOne(payment);
+
+                logTracking(trackingId, 'parcel_paid')
+
+                return res.send({
+                    success: true,
+                    modifyOrder: result,
+                    orderId: orderId,
+                    transactionId: session.payment_intent,
+                    paymentInfo: resultPayment
+                })
+            }
+            return res.send({ success: false })
+        })
+
+
+
+
+        // product cod order
+        app.post("/orders", verifyFBToken, async (req, res) => {
+            try {
+                const {
+                    productId,
+                    quantity,
+                    contactNumber,
+                    deliveryAddress,
+                    notes,
+                    paymentMethod,
+                } = req.body;
+
+                const qty = Number(quantity);
+
+                const product = await productCollection.findOne({
+                    _id: new ObjectId(productId),
+                });
+
+                if (!product) {
+                    return res.status(404).send({ message: "Product not found" });
+                }
+
+                // 🔐 payment method validation
+                if (!product.paymentOption?.includes(paymentMethod)) {
+                    return res.status(400).send({
+                        message: `Payment method ${paymentMethod} not allowed for this product`,
+                    });
+                }
+
+                // stock check
+                if (qty > product.availableQty) {
+                    return res.status(400).send({ message: "Insufficient stock" });
+                }
+
+                const order = {
+                    orderId: generateOrderId(),
+                    productId: product._id,
+                    productName: product.name,
+                    buyerEmail: req.decoded_email,
+                    quantity: qty,
+                    orderPrice: qty * product.price,
+                    paymentMethod,
+                    paymentStatus:
+                        paymentMethod === "Stripe" ? "Pending" : "Unpaid",
+                    status: "Pending",
+                    createdAt: new Date(),
+                    contactNumber,
+                    deliveryAddress,
+                    notes,
+                };
+
+                // atomic stock reduce
+                await productCollection.updateOne(
+                    { _id: product._id, availableQty: { $gte: qty } },
+                    { $inc: { availableQty: -qty } }
+                );
+
+                await orderCollection.insertOne(order);
+
+                res.send({
+                    success: true,
+                    message:
+                        paymentMethod === "Stripe"
+                            ? "Order placed, proceed to payment"
+                            : "Order placed successfully (Cash on Delivery)",
+                    orderId: order.orderId,
+                });
+            } catch (err) {
+                console.error(err);
+                res.status(500).send({ message: "Server error" });
+            }
+        });
+
+
+
+
+
         // user get products
         app.get('/all-product', async (req, res) => {
 
@@ -114,6 +357,14 @@ async function run() {
 
 
         });
+        // product details
+        app.get('/product-details/:id', verifyFBToken, async (req, res) => {
+            const id = req.params.id;
+            const query = { _id: new ObjectId(id) };
+            const result = await productCollection.findOne(query);
+            res.send(result)
+        })
+
         app.get('/home-products', async (req, res) => {
             const showOnHome = req.query.showOnHome == true
 
