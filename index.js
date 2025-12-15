@@ -153,7 +153,7 @@ async function run() {
                     return res.status(400).send({ message: "Insufficient stock" });
                 }
 
-                //  Amount from DB (NOT client)
+                //  Amount from DB 
                 const amount = product.price * qty * 100;
 
                 const session = await stripe.checkout.sessions.create({
