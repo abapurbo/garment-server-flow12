@@ -70,15 +70,14 @@ async function run() {
         const trackingsCollection = db.collection('trackings');
 
         // Trackings Logger
-        const logTracking = async (trackingId, status, buyerEmail, location = 'Main Factory – Gazipur', note = '') => {
+        const logTracking = async (trackingId, status, buyerEmail, dateTime, location = 'Main Factory – Gazipur', notes = '') => {
             const log = {
                 trackingId,
                 status,
                 buyerEmail,
-                details: status.split('_').join(' '),
-                createdAt: new Date(),
+                createdAt: dateTime ? new Date(dateTime) : new Date(),
                 location,
-                note,
+                notes,
             };
             return await trackingsCollection.insertOne(log);
         };
@@ -498,7 +497,7 @@ async function run() {
                     notes,
                 };
 
-                
+
                 await productCollection.updateOne({ _id: product._id, availableQty: { $gte: qty } }, { $inc: { availableQty: -qty } });
                 await orderCollection.insertOne(order);
 
@@ -901,6 +900,13 @@ async function run() {
             const orders = await orderCollection.find({}).toArray();
             res.send(orders)
         })
+        //orders tracking related apis
+        app.post('/trackings/order-update', verifyFBToken, managerVerify, async (req, res) => {
+            const { trackingId, status, notes, location, buyerEmail, dateTime } = req.body;
+            const result = await logTracking(trackingId, status, buyerEmail, dateTime, location, notes);
+            res.send(result);
+        });
+
         // get tracking logs by trackingId
         app.get('/trackings/:trackingId', verifyFBToken, async (req, res) => {
             const trackingId = req.params.trackingId;
