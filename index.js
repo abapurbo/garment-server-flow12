@@ -232,6 +232,20 @@ async function run() {
             res.send(result)
 
         })
+        app.get('/search-products/:email', verifyFBToken, managerVerify, async (req, res) => {
+
+            const searchText = req.query.searchText || "";
+
+            const query = {
+                providerEmail: email,
+                name: { $regex: searchText, $options: 'i' }
+            };
+
+            const result = await productCollection.find(query).toArray();
+            res.send(result);
+        }
+        );
+
 
 
         // Add Product (Manager)
