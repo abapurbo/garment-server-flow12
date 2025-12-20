@@ -60,7 +60,7 @@ const client = new MongoClient(uri, {
 // Run server
 async function run() {
     try {
-        await client.connect();
+        // await client.connect();
         const db = client.db('garmentFlowDb');
 
         const usersCollection = db.collection('users');
@@ -1135,7 +1135,7 @@ async function run() {
             res.send('GarmentFlow server is running...');
         });
 
-        await client.db("admin").command({ ping: 1 });
+        // await client.db("admin").command({ ping: 1 });
         console.log("Connected to MongoDB successfully!");
 
     } finally {
