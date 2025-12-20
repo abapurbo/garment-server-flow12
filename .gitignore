@@ -2,3 +2,5 @@
 node_modules/
 firebase_admin_key.json
 vercel
+.vercel
+.env*.local

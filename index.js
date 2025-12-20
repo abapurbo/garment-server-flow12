@@ -126,7 +126,11 @@ async function run() {
                 }
 
                 // Send the role and status
-                res.send({ role: user.role || 'buyer', status: user.status || 'pending' });
+                res.send({
+                    role: user.role || 'buyer', status: user.status || 'pending', suspendReason: user.suspendReason || '',
+                    suspendedAt: user.
+                        suspendedAt || ''
+                });
             } catch (error) {
                 console.error('Error fetching user role:', error);
                 res.status(500).send({ message: 'Internal Server Error' });
@@ -277,56 +281,6 @@ async function run() {
             res.send(result);
         });
 
-        // Stripe Payment Checkout
-        // app.post("/payment-checkout-session", verifyFBToken, async (req, res) => {
-        //     try {
-        //         const { productId, quantity } = req.body;
-        //         const product = await productCollection.findOne({ _id: new ObjectId(productId) });
-
-        //         if (!product) return res.status(404).send({ message: "Product not found" });
-        //         if (!product.paymentOption?.includes("Stripe"))
-        //             return res.status(400).send({ message: "Stripe payment not allowed" });
-        //         if (quantity > product.availableQty)
-        //             return res.status(400).send({ message: "Insufficient stock" });
-
-        //         const amount = product.price * quantity * 100;
-
-        //         // Stripe max amount check
-        //         if (amount > 99999999) {
-        //             return res.status(400).send({ message: "Total amount exceeds Stripe limit of $999,999.99" });
-        //         }
-
-        //         const session = await stripe.checkout.sessions.create({
-        //             line_items: [{
-        //                 price_data: {
-        //                     currency: "usd",
-        //                     unit_amount: amount,
-        //                     product_data: { name: product.name },
-        //                 },
-        //                 quantity
-        //             }],
-        //             mode: "payment",
-        //             metadata: {
-        //                 productId: product._id.toString(),
-        //                 productName: product.name,
-        //                 quantity: quantity.toString(),
-        //                 buyerEmail: req.decoded_email,
-        //                 deliveryAddress: req.body.deliveryAddress || '',
-        //                 notes: req.body.notes || '',
-        //                 contactNumber: req.body.contactNumber || '',
-        //                 userName: req.body.userName || ''
-        //             },
-        //             customer_email: req.decoded_email,
-        //             success_url: `${process.env.SITE_DOMAIN}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-        //             cancel_url: `${process.env.SITE_DOMAIN}/orderForm/${productId}`,
-        //         });
-
-        //         res.send({ url: session.url });
-        //     } catch (err) {
-        //         console.error(err);
-        //         res.status(500).send({ message: "Stripe session error" });
-        //     }
-        // });
         app.post("/payment-checkout-session", verifyFBToken, async (req, res) => {
             try {
                 const { productId, quantity } = req.body;
@@ -449,7 +403,7 @@ async function run() {
 
 
                 // Log Tracking
-                await logTracking(trackingId, 'Cutting_Completed', buyerEmail);
+                await logTracking(trackingId, 'Cutting Completed', buyerEmail);
 
                 res.send({ success: true, trackingId, transactionId, paymentInfo: order });
             } catch (err) {
@@ -511,7 +465,7 @@ async function run() {
                 };
                 await paymentCollection.insertOne(paymentInfo);
                 const buyerEmail = order.buyerEmail
-                await logTracking(trackingId, 'Cutting_Completed', buyerEmail);
+                await logTracking(trackingId, 'Cutting Completed', buyerEmail);
                 res.send({ success: true, message: "Order placed successfully (COD)", trackingId: order.orderId });
 
             } catch (err) {
@@ -907,12 +861,274 @@ async function run() {
             res.send(result);
         });
 
+        //   manager profile
+        app.get('/manager/profile/:email', verifyFBToken, managerVerify, async (req, res) => {
+            try {
+                const email = req.params.email;
+
+                // 1. Find all products for this provider
+                const products = await productCollection.find({ providerEmail: email }).toArray();
+                const totalProducts = products.length;
+
+                // 2. Prepare counters
+                let totalOrders = 0;
+                let pendingOrders = 0;
+                let approvedOrders = 0;
+                let rejectedOrders = 0;
+
+                // 3. Loop through each product to check orders
+                for (const product of products) {
+                    const orders = await orderCollection.find({ productId: product._id }).toArray();
+                    totalOrders += orders.length;
+
+                    orders.forEach(order => {
+                        if (order.status === "Pending") pendingOrders++;
+                        if (order.status === "Approved") approvedOrders++;
+                        if (order.status === "Rejected") rejectedOrders++;
+                    });
+                }
+
+                // 4. Return the summary
+                res.json({
+                    providerEmail: email,
+                    totalProducts,
+                    totalOrders,
+                    pendingOrders,
+                    approvedOrders,
+                    rejectedOrders
+                });
+
+            } catch (error) {
+                console.error(error);
+                res.status(500).json({ message: "Internal server error" });
+            }
+        });
+        //   manager profile
+        app.get('/admin/profile/:email', verifyFBToken, adminVerify, async (req, res) => {
+            try {
+                const email = req.params.email;
+
+                const totalUsers = await usersCollection.countDocuments();
+                const totalSuspendedUsers = await usersCollection.countDocuments({ status: "suspended" });
+                const totalPendingUsers = await usersCollection.countDocuments({ status: "pending" });
+                const totalProducts = await productCollection.countDocuments();
+                const totalOrders = await orderCollection.countDocuments();
+
+                // Optional: Count orders by status
+                const pendingOrders = await orderCollection.countDocuments({ status: "Pending" });
+                const approvedOrders = await orderCollection.countDocuments({ status: "Approved" });
+                const rejectedOrders = await orderCollection.countDocuments({ status: "Rejected" });
+
+                res.json({
+                    adminEmail: email,
+                    totalUsers,
+                    totalPendingUsers,
+                    totalSuspendedUsers,
+                    totalProducts,
+                    totalOrders,
+                    pendingOrders,
+                    approvedOrders,
+                    rejectedOrders
+                });
+
+            } catch (error) {
+                console.error(error);
+                res.status(500).json({ message: "Internal server error" });
+            }
+        });
+
+
+        // app.get('/manager/profile/:email', verifyFBToken, managerVerify, async (req, res) => {
+        //     try {
+        //         const email = req.params.email;
+
+        //         const result = await productCollection.aggregate([
+        //             { $match: { providerEmail: email } }, // ওই manager এর products
+        //             {
+        //                 $lookup: {
+        //                     from: "orderCollection",
+        //                     let: { pid: "$_id" },
+        //                     pipeline: [
+        //                         {
+        //                             $match: {
+        //                                 $expr: {
+        //                                     $eq: ["$productId", { $toString: "$$pid" }] // ObjectId -> string
+        //                                 }
+        //                             }
+        //                         }
+        //                     ],
+        //                     as: "orders"
+        //                 }
+        //             },
+        //             {
+        //                 $project: {
+        //                     totalOrders: { $size: "$orders" },
+        //                     pendingOrders: {
+        //                         $size: {
+        //                             $filter: { input: "$orders", cond: { $eq: ["$$this.status", "Pending"] } }
+        //                         }
+        //                     },
+        //                     approvedOrders: {
+        //                         $size: {
+        //                             $filter: { input: "$orders", cond: { $eq: ["$$this.status", "Approved"] } }
+        //                         }
+        //                     },
+        //                     rejectedOrders: {
+        //                         $size: {
+        //                             $filter: { input: "$orders", cond: { $eq: ["$$this.status", "Rejected"] } }
+        //                         }
+        //                     }
+        //                 }
+        //             },
+        //             {
+        //                 $group: {
+        //                     _id: null,
+        //                     totalProducts: { $sum: 1 },
+        //                     totalOrders: { $sum: "$totalOrders" },
+        //                     pendingOrders: { $sum: "$pendingOrders" },
+        //                     approvedOrders: { $sum: "$approvedOrders" },
+        //                     rejectedOrders: { $sum: "$rejectedOrders" }
+        //                 }
+        //             }
+        //         ]).toArray();
+        //         res.json({
+        //             providerEmail: email,
+        //             totalProducts: result[0]?.totalProducts || 0,
+        //             totalOrders: result[0]?.totalOrders || 0,
+        //             pendingOrders: result[0]?.pendingOrders || 0,
+        //             approvedOrders: result[0]?.approvedOrders || 0,
+        //             rejectedOrders: result[0]?.rejectedOrders || 0
+        //         });
+
+        //     } catch (error) {
+        //         console.error(error);
+        //         res.status(500).json({ message: "Internal server error" });
+        //     }
+        // });
+        // app.get('/manager/profile/:email', verifyFBToken, managerVerify, async (req, res) => {
+        //     try {
+        //         const email = req.params.email;
+
+        //         const result = await productCollection.aggregate([
+        //             { $match: { providerEmail: email } }, // ওই provider এর প্রোডাক্ট
+        //             {
+        //                 $lookup: {  // orderCollection এর সাথে join
+        //                     from: "orderCollection",
+        //                     let: { pid: "$_id" },
+        //                     pipeline: [
+        //                         {
+        //                             $match: {
+        //                                 $expr: {
+        //                                     $eq: ["$productId", { $toString: "$$pid" }]
+        //                                 }
+        //                             }
+        //                         }
+        //                     ],
+        //                     as: "orders"
+        //                 }
+        //             },
+        //             {
+        //                 $project: {
+        //                     totalOrders: { $size: "$orders" },
+        //                     pendingOrders: {
+        //                         $size: {
+        //                             $filter: { input: "$orders", cond: { $eq: ["$$this.status", "Pending"] } }
+        //                         }
+        //                     },
+        //                     approvedOrders: {
+        //                         $size: {
+        //                             $filter: { input: "$orders", cond: { $eq: ["$$this.status", "Approved"] } }
+        //                         }
+        //                     },
+        //                     rejectedOrders: {
+        //                         $size: {
+        //                             $filter: { input: "$orders", cond: { $eq: ["$$this.status", "Rejected"] } }
+        //                         }
+        //                     }
+        //                 }
+        //             },
+        //             {
+        //                 $group: {
+        //                     _id: null,
+        //                     totalProducts: { $sum: 1 },
+        //                     totalOrders: { $sum: "$totalOrders" },
+        //                     pendingOrders: { $sum: "$pendingOrders" },
+        //                     approvedOrders: { $sum: "$approvedOrders" },
+        //                     rejectedOrders: { $sum: "$rejectedOrders" }
+        //                 }
+        //             }
+        //         ]).toArray();
+
+        //         res.json({
+        //             providerEmail: email,
+        //             totalProducts: result[0]?.totalProducts || 0,
+        //             totalOrders: result[0]?.totalOrders || 0,
+        //             pendingOrders: result[0]?.pendingOrders || 0,
+        //             approvedOrders: result[0]?.approvedOrders || 0,
+        //             rejectedOrders: result[0]?.rejectedOrders || 0
+        //         });
+
+        //     } catch (error) {
+        //         console.error(error);
+        //         res.status(500).json({ message: "Internal server error" });
+        //     }
+        // });
+
+
+
+
+
         // get tracking logs by trackingId
+
+
         app.get('/trackings/:trackingId', verifyFBToken, async (req, res) => {
             const trackingId = req.params.trackingId;
             const logs = await trackingsCollection.find({ trackingId }).sort({ createdAt: 1 }).toArray();
             res.send(logs);
         });
+
+        app.get('/buyer/trackOrders', verifyFBToken, async (req, res) => {
+            try {
+                const { searchTrackingId } = req.query;
+
+                // if (!searchTrackingId || searchTrackingId.trim() === "") {
+                //     return res.status(400).json({
+                //         success: false,
+                //         message: "Tracking ID is required",
+                //     });
+                // }
+
+
+                const keyword = searchTrackingId.trim();
+
+                //prefix search (cut word match)
+                const trackingSteps = await trackingsCollection
+                    .find({
+                        trackingId: {
+                            $gte: keyword,
+                            $lt: keyword + "z"   // ensures prefix match
+                        }
+                    })
+                    .sort({ createdAt: 1 })
+                    .toArray();
+                console.log(trackingSteps)
+
+                res.status(200).json({
+                    success: true,
+                    keyword,
+                    totalSteps: trackingSteps.length,
+                    data: trackingSteps,
+                });
+
+            } catch (error) {
+                console.error("Track order error:", error);
+                res.status(500).json({
+                    success: false,
+                    message: "Internal server error",
+                });
+            }
+        });
+
 
         // Health check
         app.get('/', (req, res) => {
