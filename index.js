@@ -233,14 +233,13 @@ async function run() {
 
         })
         app.get('/search-products/:email', verifyFBToken, managerVerify, async (req, res) => {
-
+            const email = req.params.email
             const searchText = req.query.searchText || "";
 
             const query = {
                 providerEmail: email,
                 name: { $regex: searchText, $options: 'i' }
             };
-
             const result = await productCollection.find(query).toArray();
             res.send(result);
         }
